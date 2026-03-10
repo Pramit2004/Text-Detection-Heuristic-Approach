@@ -1,0 +1,1608 @@
+"""
+Grandpa Text Detector - Main Application
+FastAPI web application with beautiful UI for AI text detection
+"""
+
+from fastapi import FastAPI, UploadFile, File, Form, Request
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+import uvicorn
+from typing import Optional, List
+import PyPDF2
+import docx
+import io
+import os
+import json
+import datetime
+import uuid
+from pathlib import Path
+
+from detector.scoring.calculator import GrandpaDetector
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="Grandpa Text Detector",
+    description="Advanced AI vs Human Text Detection System",
+    version="1.0.0",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc"
+)
+
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Add GZip compression
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# Create static directory if it doesn't exist
+static_dir = Path("static")
+static_dir.mkdir(exist_ok=True)
+
+# Create templates directory
+templates_dir = Path("templates")
+templates_dir.mkdir(exist_ok=True)
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Setup templates
+templates = Jinja2Templates(directory="templates")
+
+# Initialize detector
+detector = GrandpaDetector()
+
+# Store analysis history (in production, use database)
+analysis_history = []
+
+
+# ============================================================================
+# HTML TEMPLATE
+# ============================================================================
+
+with open("templates/index.html", "w") as f:
+    f.write("""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>👴 Grandpa Text Detector - AI vs Human Detection</title>
+    <style>
+        /* ===== RESET & VARIABLES ===== */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --primary-light: #818cf8;
+            --secondary: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --info: #3b82f6;
+            --dark: #1e293b;
+            --light: #f8fafc;
+            --gray-100: #f1f5f9;
+            --gray-200: #e2e8f0;
+            --gray-300: #cbd5e1;
+            --gray-400: #94a3b8;
+            --gray-500: #64748b;
+            --gray-600: #475569;
+            --gray-700: #334155;
+            --gray-800: #1e293b;
+            --gray-900: #0f172a;
+            --success: #10b981;
+            --success-light: #d1fae5;
+            --warning-light: #fed7aa;
+            --danger-light: #fee2e2;
+            --info-light: #dbeafe;
+            --border-radius: 1rem;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            --shadow-md: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+            --shadow-lg: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+            --shadow-xl: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+        }
+
+        /* ===== BASE STYLES ===== */
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #9f7aea 100%);
+            min-height: 100vh;
+            padding: 2rem 1rem;
+            color: var(--gray-800);
+            line-height: 1.5;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        /* ===== HEADER ===== */
+        .header {
+            text-align: center;
+            margin-bottom: 3rem;
+            animation: fadeInDown 0.8s ease-out;
+        }
+
+        @keyframes fadeInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .grandpa-icon {
+            font-size: 5rem;
+            margin-bottom: 1rem;
+            filter: drop-shadow(0 10px 15px -3px rgba(0,0,0,0.2));
+            animation: bounce 2s infinite;
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+
+        h1 {
+            font-size: 3rem;
+            font-weight: 800;
+            color: white;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.02em;
+        }
+
+        .subtitle {
+            font-size: 1.2rem;
+            color: rgba(255,255,255,0.9);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .subtitle a {
+            color: white;
+            text-decoration: none;
+            font-weight: 600;
+            border-bottom: 2px solid rgba(255,255,255,0.3);
+            transition: border-color 0.3s;
+        }
+
+        .subtitle a:hover {
+            border-bottom-color: white;
+        }
+
+        /* ===== MAIN CARD ===== */
+        .main-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow-xl);
+            overflow: hidden;
+            animation: fadeInUp 0.8s ease-out;
+            margin-bottom: 2rem;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .card-header {
+            padding: 2rem;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: white;
+        }
+
+        .card-header h2 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card-header p {
+            opacity: 0.9;
+            font-size: 1rem;
+        }
+
+        .card-body {
+            padding: 2rem;
+        }
+
+        /* ===== UPLOAD AREA ===== */
+        .upload-area {
+            border: 3px dashed var(--gray-300);
+            border-radius: var(--border-radius);
+            padding: 3rem 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: var(--gray-100);
+            margin-bottom: 1.5rem;
+        }
+
+        .upload-area:hover {
+            border-color: var(--primary);
+            background: rgba(99, 102, 241, 0.05);
+        }
+
+        .upload-area.dragover {
+            border-color: var(--primary);
+            background: rgba(99, 102, 241, 0.1);
+            transform: scale(1.02);
+        }
+
+        .upload-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+            color: var(--primary);
+        }
+
+        .upload-text {
+            font-size: 1.2rem;
+            color: var(--gray-600);
+            margin-bottom: 0.5rem;
+        }
+
+        .upload-hint {
+            font-size: 0.9rem;
+            color: var(--gray-500);
+        }
+
+        .file-info {
+            display: none;
+            background: var(--primary-light);
+            color: white;
+            padding: 1rem;
+            border-radius: var(--border-radius);
+            margin-top: 1rem;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .file-info.show {
+            display: flex;
+        }
+
+        .file-name {
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .remove-file {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 1.2rem;
+            cursor: pointer;
+            padding: 0.2rem 0.5rem;
+            border-radius: 999px;
+            transition: background 0.3s;
+        }
+
+        .remove-file:hover {
+            background: rgba(255,255,255,0.2);
+        }
+
+        /* ===== TEXTAREA ===== */
+        .textarea-container {
+            margin-bottom: 1.5rem;
+        }
+
+        textarea {
+            width: 100%;
+            height: 200px;
+            padding: 1rem;
+            border: 2px solid var(--gray-200);
+            border-radius: var(--border-radius);
+            font-size: 1rem;
+            font-family: inherit;
+            resize: vertical;
+            transition: all 0.3s;
+            background: white;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+
+        .char-counter {
+            text-align: right;
+            font-size: 0.9rem;
+            color: var(--gray-500);
+            margin-top: 0.5rem;
+        }
+
+        .char-counter.warning {
+            color: var(--warning);
+        }
+
+        .char-counter.danger {
+            color: var(--danger);
+        }
+
+        /* ===== BUTTONS ===== */
+        .button-group {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 999px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            flex: 1;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: white;
+            box-shadow: var(--shadow);
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .btn-secondary {
+            background: var(--gray-200);
+            color: var(--gray-700);
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: var(--gray-300);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* ===== LOADER ===== */
+        .loader-container {
+            display: none;
+            text-align: center;
+            padding: 3rem;
+        }
+
+        .loader {
+            width: 60px;
+            height: 60px;
+            margin: 0 auto 1rem;
+            border: 5px solid var(--gray-200);
+            border-top: 5px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loader-text {
+            color: var(--gray-600);
+            font-size: 1.1rem;
+        }
+
+        /* ===== RESULTS ===== */
+        .results {
+            display: none;
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .score-section {
+            text-align: center;
+            padding: 2rem;
+            background: linear-gradient(135deg, var(--gray-100) 0%, white 100%);
+            border-radius: var(--border-radius);
+            margin-bottom: 2rem;
+        }
+
+        .score-gauge {
+            width: 200px;
+            height: 200px;
+            margin: 0 auto 1.5rem;
+            position: relative;
+        }
+
+        .gauge-bg {
+            fill: none;
+            stroke: var(--gray-200);
+            stroke-width: 15;
+        }
+
+        .gauge-fill {
+            fill: none;
+            stroke-width: 15;
+            stroke-linecap: round;
+            transition: stroke-dasharray 1s ease;
+        }
+
+        .score-text {
+            font-size: 3rem;
+            font-weight: 800;
+            fill: var(--gray-800);
+            dominant-baseline: middle;
+            text-anchor: middle;
+        }
+
+        .score-label {
+            font-size: 0.9rem;
+            fill: var(--gray-500);
+            dominant-baseline: middle;
+            text-anchor: middle;
+            transform: translateY(20px);
+        }
+
+        .classification {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .confidence {
+            font-size: 1.1rem;
+            color: var(--gray-600);
+            margin-bottom: 1rem;
+        }
+
+        .description {
+            font-size: 1rem;
+            color: var(--gray-600);
+            max-width: 600px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+
+        /* ===== CATEGORY SCORES ===== */
+        .category-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .category-card {
+            background: white;
+            border-radius: var(--border-radius);
+            padding: 1.5rem;
+            box-shadow: var(--shadow);
+            text-align: center;
+            transition: transform 0.3s;
+        }
+
+        .category-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .category-icon {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .category-title {
+            font-weight: 600;
+            color: var(--gray-700);
+            margin-bottom: 0.5rem;
+            text-transform: capitalize;
+        }
+
+        .category-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .category-bar {
+            height: 8px;
+            background: var(--gray-200);
+            border-radius: 999px;
+            overflow: hidden;
+        }
+
+        .category-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary) 0%, var(--primary-light) 100%);
+            border-radius: 999px;
+            transition: width 1s ease;
+        }
+
+        /* ===== DETAILED REPORT ===== */
+        .detailed-report {
+            background: var(--gray-900);
+            color: var(--gray-300);
+            border-radius: var(--border-radius);
+            padding: 2rem;
+            margin-bottom: 2rem;
+            font-family: 'Fira Code', 'Courier New', monospace;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            box-shadow: var(--shadow-lg);
+        }
+
+        /* ===== SUGGESTIONS ===== */
+        .suggestions {
+            margin-bottom: 2rem;
+        }
+
+        .suggestions h3 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: var(--gray-800);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .suggestion-card {
+            background: white;
+            border-radius: var(--border-radius);
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            border-left: 4px solid var(--primary);
+            box-shadow: var(--shadow);
+        }
+
+        .suggestion-priority {
+            display: inline-block;
+            padding: 0.2rem 0.5rem;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .priority-high {
+            background: var(--danger-light);
+            color: var(--danger);
+        }
+
+        .priority-medium {
+            background: var(--warning-light);
+            color: var(--warning);
+        }
+
+        .priority-low {
+            background: var(--info-light);
+            color: var(--info);
+        }
+
+        .suggestion-issue {
+            font-weight: 600;
+            color: var(--gray-800);
+            margin-bottom: 0.25rem;
+        }
+
+        .suggestion-text {
+            color: var(--gray-600);
+            font-size: 0.95rem;
+        }
+
+        /* ===== ACTION BUTTONS ===== */
+        .action-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 2px solid var(--primary);
+            color: var(--primary);
+        }
+
+        .btn-outline:hover {
+            background: var(--primary);
+            color: white;
+        }
+
+        /* ===== METADATA ===== */
+        .metadata {
+            font-size: 0.9rem;
+            color: var(--gray-500);
+            text-align: center;
+            margin-top: 2rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--gray-200);
+        }
+
+        /* ===== HISTORY ===== */
+        .history-section {
+            background: white;
+            border-radius: var(--border-radius);
+            padding: 2rem;
+            margin-top: 2rem;
+            box-shadow: var(--shadow);
+        }
+
+        .history-section h3 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: var(--gray-800);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .history-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .history-item {
+            padding: 1rem;
+            border-bottom: 1px solid var(--gray-200);
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .history-item:hover {
+            background: var(--gray-100);
+        }
+
+        .history-item:last-child {
+            border-bottom: none;
+        }
+
+        .history-score {
+            display: inline-block;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: var(--primary);
+            color: white;
+            text-align: center;
+            line-height: 50px;
+            font-weight: 600;
+            margin-right: 1rem;
+        }
+
+        .history-details {
+            flex: 1;
+        }
+
+        .history-classification {
+            font-weight: 600;
+            color: var(--gray-800);
+        }
+
+        .history-time {
+            font-size: 0.85rem;
+            color: var(--gray-500);
+        }
+
+        /* ===== FOOTER ===== */
+        .footer {
+            text-align: center;
+            margin-top: 3rem;
+            color: rgba(255,255,255,0.8);
+            font-size: 0.9rem;
+        }
+
+        .footer a {
+            color: white;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        /* ===== RESPONSIVE ===== */
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2rem;
+            }
+            
+            .grandpa-icon {
+                font-size: 3rem;
+            }
+            
+            .card-header h2 {
+                font-size: 1.5rem;
+            }
+            
+            .button-group {
+                flex-direction: column;
+            }
+            
+            .category-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .classification {
+                font-size: 1.5rem;
+            }
+        }
+
+        /* ===== TOAST NOTIFICATION ===== */
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: white;
+            border-radius: var(--border-radius);
+            padding: 1rem 1.5rem;
+            box-shadow: var(--shadow-lg);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            animation: slideIn 0.3s ease;
+            z-index: 1000;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .toast.success {
+            border-left: 4px solid var(--success);
+        }
+
+        .toast.error {
+            border-left: 4px solid var(--danger);
+        }
+
+        .toast.info {
+            border-left: 4px solid var(--info);
+        }
+
+        /* ===== PRINT STYLES ===== */
+        @media print {
+            body {
+                background: white;
+                padding: 0;
+            }
+            
+            .header, .main-card, .footer {
+                box-shadow: none;
+                background: white;
+            }
+            
+            .btn, .upload-area, .history-section {
+                display: none;
+            }
+        }
+    </style>
+    <!-- Add Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <!-- Add Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Fira+Code&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="grandpa-icon">👴</div>
+            <h1>Grandpa Text Detector</h1>
+            <p class="subtitle">
+                Advanced AI vs Human Text Detection System
+                <br>
+                <a href="#" onclick="showAbout()">Learn more <i class="fas fa-arrow-right"></i></a>
+            </p>
+        </header>
+
+        <!-- Main Card -->
+        <div class="main-card">
+            <div class="card-header">
+                <h2>
+                    <i class="fas fa-magic"></i>
+                    Analyze Your Text
+                </h2>
+                <p>Upload a file or paste text to detect if it's AI-generated or human-written</p>
+            </div>
+            
+            <div class="card-body">
+                <!-- Upload Area -->
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                    </div>
+                    <div class="upload-text">
+                        Drag & drop a file here or click to browse
+                    </div>
+                    <div class="upload-hint">
+                        Supports: TXT, PDF, DOCX (Max 10MB)
+                    </div>
+                    <input type="file" id="fileInput" style="display: none;" accept=".txt,.pdf,.docx">
+                </div>
+
+                <!-- File Info -->
+                <div class="file-info" id="fileInfo">
+                    <div class="file-name">
+                        <i class="fas fa-file"></i>
+                        <span id="fileName"></span>
+                    </div>
+                    <button class="remove-file" onclick="removeFile()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <!-- Text Input -->
+                <div class="textarea-container">
+                    <textarea id="textInput" placeholder="Paste your text here... (minimum 50 characters)"></textarea>
+                    <div class="char-counter" id="charCounter">0 characters</div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="button-group">
+                    <button class="btn btn-primary" id="analyzeBtn" onclick="analyzeText()">
+                        <i class="fas fa-search"></i>
+                        Analyze Text
+                    </button>
+                    <button class="btn btn-secondary" id="clearBtn" onclick="clearAll()">
+                        <i class="fas fa-undo"></i>
+                        Clear
+                    </button>
+                </div>
+
+                <!-- Loader -->
+                <div class="loader-container" id="loader">
+                    <div class="loader"></div>
+                    <div class="loader-text">Grandpa is thinking... 👴</div>
+                </div>
+
+                <!-- Results -->
+                <div class="results" id="results"></div>
+            </div>
+        </div>
+
+        <!-- History Section -->
+        <div class="history-section" id="historySection" style="display: none;">
+            <h3>
+                <i class="fas fa-history"></i>
+                Recent Analyses
+            </h3>
+            <div class="history-list" id="historyList"></div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>
+                Made with <i class="fas fa-heart" style="color: #ef4444;"></i> for authentic text detection
+                <br>
+                <a href="https://github.com/yourusername/grandpa-text-detector" target="_blank">
+                    <i class="fab fa-github"></i> GitHub
+                </a>
+                &nbsp;|&nbsp;
+                <a href="#" onclick="showApiDocs()">
+                    <i class="fas fa-code"></i> API Docs
+                </a>
+            </p>
+        </footer>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toastContainer"></div>
+
+    <script>
+        // ==========================================================================
+        // GLOBAL VARIABLES
+        // ==========================================================================
+        let selectedFile = null;
+        let currentResult = null;
+        const maxFileSize = 10 * 1024 * 1024; // 10MB
+
+        // ==========================================================================
+        // INITIALIZATION
+        // ==========================================================================
+        document.addEventListener('DOMContentLoaded', function() {
+            // Load history from localStorage
+            loadHistory();
+            
+            // Set up event listeners
+            setupEventListeners();
+            
+            // Update char counter
+            updateCharCounter();
+        });
+
+        function setupEventListeners() {
+            // Upload area
+            const uploadArea = document.getElementById('uploadArea');
+            const fileInput = document.getElementById('fileInput');
+
+            uploadArea.addEventListener('click', () => fileInput.click());
+            
+            uploadArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadArea.classList.add('dragover');
+            });
+
+            uploadArea.addEventListener('dragleave', () => {
+                uploadArea.classList.remove('dragover');
+            });
+
+            uploadArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadArea.classList.remove('dragover');
+                
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    handleFileSelect(files[0]);
+                }
+            });
+
+            fileInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    handleFileSelect(e.target.files[0]);
+                }
+            });
+
+            // Text input
+            document.getElementById('textInput').addEventListener('input', updateCharCounter);
+        }
+
+        // ==========================================================================
+        // FILE HANDLING
+        // ==========================================================================
+        function handleFileSelect(file) {
+            // Check file size
+            if (file.size > maxFileSize) {
+                showToast('File size exceeds 10MB limit', 'error');
+                return;
+            }
+
+            // Check file type
+            const validTypes = ['.txt', '.pdf', '.docx'];
+            const fileExt = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+            
+            if (!validTypes.includes(fileExt)) {
+                showToast('Invalid file type. Please upload TXT, PDF, or DOCX', 'error');
+                return;
+            }
+
+            selectedFile = file;
+            
+            // Update UI
+            document.getElementById('fileName').textContent = file.name;
+            document.getElementById('fileInfo').classList.add('show');
+            
+            // Clear text input
+            document.getElementById('textInput').value = '';
+            updateCharCounter();
+            
+            showToast(`File "${file.name}" selected`, 'success');
+        }
+
+        function removeFile() {
+            selectedFile = null;
+            document.getElementById('fileInput').value = '';
+            document.getElementById('fileInfo').classList.remove('show');
+        }
+
+        // ==========================================================================
+        // TEXT HANDLING
+        // ==========================================================================
+        function updateCharCounter() {
+            const text = document.getElementById('textInput').value;
+            const counter = document.getElementById('charCounter');
+            
+            counter.textContent = `${text.length} characters`;
+            
+            if (text.length < 50) {
+                counter.classList.add('warning');
+                counter.classList.remove('danger');
+            } else if (text.length > 10000) {
+                counter.classList.add('danger');
+                counter.classList.remove('warning');
+            } else {
+                counter.classList.remove('warning', 'danger');
+            }
+        }
+
+        // ==========================================================================
+        // ANALYSIS
+        // ==========================================================================
+        async function analyzeText() {
+            const text = document.getElementById('textInput').value;
+            const analyzeBtn = document.getElementById('analyzeBtn');
+            const loader = document.getElementById('loader');
+            const results = document.getElementById('results');
+
+            // Validate input
+            if (!selectedFile && !text) {
+                showToast('Please enter text or upload a file', 'error');
+                return;
+            }
+
+            if (text && text.length < 50) {
+                showToast('Text must be at least 50 characters', 'error');
+                return;
+            }
+
+            // Show loader
+            analyzeBtn.disabled = true;
+            loader.style.display = 'block';
+            results.style.display = 'none';
+
+            // Prepare form data
+            const formData = new FormData();
+            if (selectedFile) {
+                formData.append('file', selectedFile);
+            } else {
+                formData.append('text', text);
+            }
+
+            try {
+                const response = await fetch('/detect', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    currentResult = data;
+                    displayResults(data);
+                    saveToHistory(data);
+                    showToast('Analysis complete!', 'success');
+                } else {
+                    showToast(data.error || 'Analysis failed', 'error');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showToast('Network error. Please try again.', 'error');
+            } finally {
+                analyzeBtn.disabled = false;
+                loader.style.display = 'none';
+            }
+        }
+
+        // ==========================================================================
+        // DISPLAY RESULTS
+        // ==========================================================================
+        function displayResults(data) {
+            const results = document.getElementById('results');
+            
+            // Get color based on classification
+            const colors = {
+                'AI-Generated': '#ef4444',
+                'Likely AI-Generated': '#f59e0b',
+                'Mixed / Uncertain': '#fbbf24',
+                'Likely Human-Written': '#10b981',
+                'Human-Written': '#3b82f6'
+            };
+            
+            const color = colors[data.classification.label] || '#6366f1';
+            
+            // Calculate gauge rotation
+            const score = data.total_score;
+            const gaugeValue = (score / 100) * 283; // 283 is circumference of circle (2 * π * 45)
+            
+            // Build category cards
+            const categoryCards = Object.entries(data.category_scores).map(([key, value]) => `
+                <div class="category-card">
+                    <div class="category-icon">
+                        ${getCategoryIcon(key)}
+                    </div>
+                    <div class="category-title">${key.replace('_', ' ')}</div>
+                    <div class="category-value">${value}</div>
+                    <div class="category-bar">
+                        <div class="category-bar-fill" style="width: ${value}%"></div>
+                    </div>
+                </div>
+            `).join('');
+
+            // Build suggestions
+            const suggestions = data.suggestions.map(s => `
+                <div class="suggestion-card">
+                    <span class="suggestion-priority priority-${s.priority}">
+                        ${s.priority.toUpperCase()}
+                    </span>
+                    <div class="suggestion-issue">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        ${s.issue}
+                    </div>
+                    <div class="suggestion-text">
+                        <i class="fas fa-lightbulb"></i>
+                        ${s.suggestion}
+                    </div>
+                </div>
+            `).join('');
+
+            results.innerHTML = `
+                <div class="score-section">
+                    <!-- SVG Gauge -->
+                    <svg viewBox="0 0 120 120" class="score-gauge">
+                        <circle cx="60" cy="60" r="45" class="gauge-bg"></circle>
+                        <circle cx="60" cy="60" r="45" class="gauge-fill" 
+                                stroke="${color}"
+                                stroke-dasharray="283"
+                                stroke-dashoffset="${283 - gaugeValue}"
+                                transform="rotate(-90 60 60)"></circle>
+                        <text x="60" y="60" class="score-text">${score}</text>
+                        <text x="60" y="80" class="score-label">HUMAN SCORE</text>
+                    </svg>
+
+                    <div class="classification">
+                        <span>${data.classification.emoji}</span>
+                        <span style="color: ${color}">${data.classification.label}</span>
+                    </div>
+                    
+                    <div class="confidence">
+                        Confidence: <strong>${data.confidence}%</strong> (${data.confidence_level})
+                    </div>
+                    
+                    <div class="description">
+                        ${data.classification.description}
+                    </div>
+                </div>
+
+                <h3 style="margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="fas fa-chart-pie"></i>
+                    Category Breakdown
+                </h3>
+                
+                <div class="category-grid">
+                    ${categoryCards}
+                </div>
+
+                <h3 style="margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="fas fa-file-alt"></i>
+                    Detailed Report
+                </h3>
+                
+                <div class="detailed-report">
+                    ${data.report}
+                </div>
+
+                ${suggestions ? `
+                    <div class="suggestions">
+                        <h3>
+                            <i class="fas fa-lightbulb"></i>
+                            Improvement Suggestions
+                        </h3>
+                        ${suggestions}
+                    </div>
+                ` : ''}
+
+                <div class="action-buttons">
+                    <button class="btn btn-outline" onclick="downloadReport()">
+                        <i class="fas fa-download"></i>
+                        Download Report
+                    </button>
+                    <button class="btn btn-outline" onclick="copyResults()">
+                        <i class="fas fa-copy"></i>
+                        Copy Results
+                    </button>
+                    <button class="btn btn-outline" onclick="shareResults()">
+                        <i class="fas fa-share-alt"></i>
+                        Share
+                    </button>
+                </div>
+
+                <div class="metadata">
+                    <i class="fas fa-clock"></i> Analyzed: ${new Date(data.metadata.analyzed_at).toLocaleString()}
+                    &nbsp;|&nbsp;
+                    <i class="fas fa-file-alt"></i> ${data.metadata.word_count} words
+                </div>
+            `;
+
+            results.style.display = 'block';
+            results.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function getCategoryIcon(category) {
+            const icons = {
+                'statistical': '📊',
+                'linguistic': '🗣️',
+                'rhetorical': '🎭',
+                'content': '📝',
+                'meta': '🔖'
+            };
+            return icons[category] || '📊';
+        }
+
+        // ==========================================================================
+        // HISTORY
+        // ==========================================================================
+        function saveToHistory(data) {
+            const history = JSON.parse(localStorage.getItem('analysisHistory') || '[]');
+            
+            history.unshift({
+                id: Date.now(),
+                timestamp: new Date().toISOString(),
+                score: data.total_score,
+                classification: data.classification.label,
+                emoji: data.classification.emoji,
+                color: data.classification.color,
+                word_count: data.metadata.word_count
+            });
+
+            // Keep only last 10 analyses
+            if (history.length > 10) {
+                history.pop();
+            }
+
+            localStorage.setItem('analysisHistory', JSON.stringify(history));
+            loadHistory();
+        }
+
+        function loadHistory() {
+            const history = JSON.parse(localStorage.getItem('analysisHistory') || '[]');
+            const historySection = document.getElementById('historySection');
+            const historyList = document.getElementById('historyList');
+
+            if (history.length > 0) {
+                historySection.style.display = 'block';
+                
+                historyList.innerHTML = history.map(item => `
+                    <div class="history-item" onclick="loadHistoryItem(${item.id})">
+                        <div style="display: flex; align-items: center;">
+                            <div class="history-score" style="background: ${item.color || '#6366f1'}">
+                                ${item.score}
+                            </div>
+                            <div class="history-details">
+                                <div class="history-classification">
+                                    ${item.emoji} ${item.classification}
+                                </div>
+                                <div class="history-time">
+                                    <i class="fas fa-clock"></i> ${new Date(item.timestamp).toLocaleString()}
+                                    &nbsp;|&nbsp;
+                                    <i class="fas fa-file-alt"></i> ${item.word_count} words
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                historySection.style.display = 'none';
+            }
+        }
+
+        function loadHistoryItem(id) {
+            // In a real app, you'd load the full result from backend
+            showToast('Loading historical analysis...', 'info');
+        }
+
+        // ==========================================================================
+        // UTILITIES
+        // ==========================================================================
+        function clearAll() {
+            document.getElementById('textInput').value = '';
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('charCounter').textContent = '0 characters';
+            removeFile();
+            showToast('All cleared!', 'info');
+        }
+
+        function showToast(message, type = 'info') {
+            const toastContainer = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerHTML = `
+                <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'}"></i>
+                <span>${message}</span>
+            `;
+            
+            toastContainer.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.remove();
+            }, 3000);
+        }
+
+        function downloadReport() {
+            if (!currentResult) return;
+            
+            const data = JSON.stringify(currentResult, null, 2);
+            const blob = new Blob([data], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `grandpa-report-${Date.now()}.json`;
+            a.click();
+            
+            URL.revokeObjectURL(url);
+            showToast('Report downloaded!', 'success');
+        }
+
+        function copyResults() {
+            if (!currentResult) return;
+            
+            const text = currentResult.report;
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('Results copied to clipboard!', 'success');
+            }).catch(() => {
+                showToast('Failed to copy', 'error');
+            });
+        }
+
+        function shareResults() {
+            if (!currentResult) return;
+            
+            if (navigator.share) {
+                navigator.share({
+                    title: 'Grandpa Text Detector Results',
+                    text: currentResult.report.substring(0, 500) + '...',
+                    url: window.location.href
+                }).catch(() => {
+                    showToast('Sharing cancelled', 'info');
+                });
+            } else {
+                copyResults();
+            }
+        }
+
+        function showAbout() {
+            showToast('Grandpa Text Detector v1.0 - Advanced AI detection using heuristic rules', 'info');
+        }
+
+        function showApiDocs() {
+            window.open('/api/docs', '_blank');
+        }
+    </script>
+</body>
+</html>
+""")
+
+# ============================================================================
+# API ENDPOINTS
+# ============================================================================
+
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    """Serve the main HTML page"""
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/api")
+async def api_root():
+    """API root endpoint"""
+    return {
+        "name": "Grandpa Text Detector API",
+        "version": "1.0.0",
+        "description": "Advanced AI vs Human Text Detection",
+        "endpoints": {
+            "detect": "/detect - POST text or file for analysis",
+            "health": "/health - Check API health",
+            "stats": "/stats - Get system statistics",
+            "docs": "/api/docs - Interactive API documentation"
+        }
+    }
+
+@app.post("/detect")
+async def detect_text(
+    text: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None)
+):
+    """
+    Detect if text is AI-generated or human-written
+    Accepts either direct text input or file upload (TXT, PDF, DOCX)
+    """
+    try:
+        # Extract text from file or use direct input
+        if file:
+            content = await file.read()
+            
+            if file.filename.endswith('.txt'):
+                text = content.decode('utf-8')
+                
+            elif file.filename.endswith('.pdf'):
+                try:
+                    pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
+                    text = ""
+                    for page in pdf_reader.pages:
+                        text += page.extract_text() + "\n"
+                except Exception as e:
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": f"Failed to parse PDF: {str(e)}"}
+                    )
+                    
+            elif file.filename.endswith('.docx'):
+                try:
+                    doc = docx.Document(io.BytesIO(content))
+                    text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+                except Exception as e:
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": f"Failed to parse DOCX: {str(e)}"}
+                    )
+            else:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "Unsupported file format. Please upload TXT, PDF, or DOCX"}
+                )
+        
+        if not text or len(text.strip()) < 50:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Text too short. Please provide at least 50 characters."}
+            )
+        
+        if len(text) > 100000:  # 100KB limit
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Text too long. Maximum 100,000 characters."}
+            )
+        
+        # Analyze text
+        result = detector.analyze(text, file.filename if file else None)
+        
+        # Store in history (in production, use database)
+        analysis_history.append({
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.datetime.now().isoformat(),
+            "result": result
+        })
+        
+        # Keep only last 100 analyses
+        if len(analysis_history) > 100:
+            analysis_history.pop(0)
+        
+        return JSONResponse(content=result)
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Analysis failed: {str(e)}"}
+        )
+
+@app.get("/health")
+async def health_check():
+    """Check API health"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.datetime.now().isoformat(),
+        "version": "1.0.0",
+        "analyzers": {
+            "statistical": True,
+            "linguistic": True,
+            "rhetorical": True,
+            "content": True,
+            "meta": True
+        }
+    }
+
+@app.get("/stats")
+async def get_stats():
+    """Get system statistics"""
+    total_analyses = len(analysis_history)
+    
+    if total_analyses == 0:
+        return {
+            "total_analyses": 0,
+            "average_score": 0,
+            "classifications": {},
+            "popular_times": []
+        }
+    
+    # Calculate statistics
+    scores = [h["result"]["total_score"] for h in analysis_history]
+    avg_score = sum(scores) / len(scores)
+    
+    # Count classifications
+    classifications = {}
+    for h in analysis_history:
+        label = h["result"]["classification"]["label"]
+        classifications[label] = classifications.get(label, 0) + 1
+    
+    return {
+        "total_analyses": total_analyses,
+        "average_score": round(avg_score, 2),
+        "classifications": classifications,
+        "last_analysis": analysis_history[-1]["timestamp"] if analysis_history else None
+    }
+
+@app.get("/history")
+async def get_history(limit: int = 10):
+    """Get analysis history"""
+    return {
+        "total": len(analysis_history),
+        "analyses": [
+            {
+                "id": h["id"],
+                "timestamp": h["timestamp"],
+                "score": h["result"]["total_score"],
+                "classification": h["result"]["classification"]["label"],
+                "word_count": h["result"]["metadata"]["word_count"]
+            }
+            for h in analysis_history[-limit:]
+        ]
+    }
+
+@app.get("/history/{analysis_id}")
+async def get_analysis(analysis_id: str):
+    """Get specific analysis by ID"""
+    for h in analysis_history:
+        if h["id"] == analysis_id:
+            return h["result"]
+    
+    return JSONResponse(
+        status_code=404,
+        content={"error": "Analysis not found"}
+    )
+
+@app.delete("/history")
+async def clear_history():
+    """Clear analysis history"""
+    analysis_history.clear()
+    return {"message": "History cleared"}
+
+# ============================================================================
+# MAIN ENTRY POINT
+# ============================================================================
+
+if __name__ == "__main__":
+    print("""
+    ╔══════════════════════════════════════════════════════════════╗
+    ║     👴 GRANDPA TEXT DETECTOR - AI vs Human Detection        ║
+    ║                                                              ║
+    ║  🚀 Server: http://localhost:8000                           ║
+    ║  📚 API Docs: http://localhost:8000/api/docs                ║
+    ║  💡 Health: http://localhost:8000/health                    ║
+    ║                                                              ║
+    ║  Press Ctrl+C to stop the server                            ║
+    ╚══════════════════════════════════════════════════════════════╝
+    """)
+    
+    uvicorn.run(
+        "app:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        log_level="info"
+    )

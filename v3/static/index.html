@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Grandpa Text Detector</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            color: #333;
+        }
+        h1 {
+            text-align: center;
+            color: #4a5568;
+        }
+        textarea {
+            width: 100%;
+            height: 200px;
+            padding: 15px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 16px;
+            margin-bottom: 20px;
+            resize: vertical;
+        }
+        .file-upload {
+            border: 2px dashed #cbd5e0;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 20px;
+            cursor: pointer;
+        }
+        .file-upload:hover {
+            border-color: #667eea;
+            background: #f7fafc;
+        }
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 100%;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+        }
+        .result {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 8px;
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+        }
+        .score-gauge {
+            width: 200px;
+            height: 200px;
+            margin: 20px auto;
+            position: relative;
+        }
+        .score-circle {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+            font-weight: bold;
+            color: white;
+            background: conic-gradient(#4caf50 0deg, #ffc107 180deg, #f44336 360deg);
+        }
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .metric-card {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .metric-title {
+            font-size: 14px;
+            color: #718096;
+            margin-bottom: 5px;
+        }
+        .metric-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #4a5568;
+        }
+        .report {
+            margin-top: 20px;
+            padding: 20px;
+            background: #1a202c;
+            color: #e2e8f0;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+            font-size: 14px;
+        }
+        .loader {
+            display: none;
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>👴 Grandpa Text Detector</h1>
+        <p style="text-align: center; color: #666;">
+            Upload text or a file to detect if it's AI-generated or human-written
+        </p>
+        
+        <div class="file-upload" onclick="document.getElementById('fileInput').click()">
+            <input type="file" id="fileInput" style="display: none;" accept=".txt,.pdf,.docx">
+            <p>📁 Click to upload a file (TXT, PDF, DOCX)</p>
+            <p style="color: #999; font-size: 14px;">Or paste text below</p>
+        </div>
+        
+        <textarea id="textInput" placeholder="Paste your text here..."></textarea>
+        
+        <button onclick="detectText()">🔍 Analyze Text</button>
+        
+        <div class="loader" id="loader"></div>
+        
+        <div class="result" id="result" style="display: none;">
+            <h3>Analysis Results</h3>
+            
+            <div style="text-align: center;">
+                <div class="score-gauge">
+                    <div class="score-circle" id="scoreCircle">0</div>
+                </div>
+                <h2 id="classification"></h2>
+                <p id="description"></p>
+            </div>
+            
+            <div class="metrics-grid" id="categoryScores"></div>
+            
+            <div class="report" id="fullReport"></div>
+        </div>
+    </div>
+    
+    <script>
+        async function detectText() {
+            const text = document.getElementById('textInput').value;
+            const file = document.getElementById('fileInput').files[0];
+            
+            if (!text && !file) {
+                alert('Please enter text or upload a file');
+                return;
+            }
+            
+            // Show loader
+            document.getElementById('loader').style.display = 'block';
+            document.getElementById('result').style.display = 'none';
+            
+            const formData = new FormData();
+            if (text) {
+                formData.append('text', text);
+            }
+            if (file) {
+                formData.append('file', file);
+            }
+            
+            try {
+                const response = await fetch('/detect', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    displayResults(data);
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (error) {
+                alert('Error analyzing text: ' + error);
+            } finally {
+                document.getElementById('loader').style.display = 'none';
+            }
+        }
+        
+        function displayResults(data) {
+            // Display score
+            const scoreCircle = document.getElementById('scoreCircle');
+            scoreCircle.textContent = data.total_score;
+            
+            // Set color based on score
+            const color = data.classification.color;
+            let backgroundColor;
+            switch(color) {
+                case 'red': backgroundColor = '#f44336'; break;
+                case 'orange': backgroundColor = '#ff9800'; break;
+                case 'yellow': backgroundColor = '#ffc107'; break;
+                case 'lightgreen': backgroundColor = '#8bc34a'; break;
+                case 'green': backgroundColor = '#4caf50'; break;
+                default: backgroundColor = '#667eea';
+            }
+            scoreCircle.style.background = backgroundColor;
+            
+            // Classification
+            document.getElementById('classification').textContent = data.classification.label;
+            document.getElementById('description').textContent = data.classification.description;
+            
+            // Category scores
+            const categoryGrid = document.getElementById('categoryScores');
+            categoryGrid.innerHTML = '';
+            
+            for (const [category, score] of Object.entries(data.category_scores)) {
+                const card = document.createElement('div');
+                card.className = 'metric-card';
+                card.innerHTML = `
+                    <div class="metric-title">${category.charAt(0).toUpperCase() + category.slice(1)}</div>
+                    <div class="metric-value">${score}</div>
+                `;
+                categoryGrid.appendChild(card);
+            }
+            
+            // Full report
+            document.getElementById('fullReport').textContent = data.report;
+            
+            // Show result
+            document.getElementById('result').style.display = 'block';
+        }
+        
+        // Handle file selection
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            if (this.files[0]) {
+                alert('File selected: ' + this.files[0].name);
+            }
+        });
+    </script>
+</body>
+</html>
